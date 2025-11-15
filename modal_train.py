@@ -30,7 +30,7 @@ def build_image() -> modal.Image:
         # forward your whole project so `train.py` is visible at /root/project
         .add_local_dir(
             str(LOCAL_PROJECT_ROOT),
-            remote_path=str(PROJECT_ROOT),
+            remote_path="/root/project",
         )
     )
 
