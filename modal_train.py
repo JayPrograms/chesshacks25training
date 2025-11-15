@@ -12,23 +12,31 @@ import modal
 APP_NAME = "chesshacks25-train"
 ARTIFACT_VOLUME_NAME = "chesshacks25-artifacts"
 ARTIFACT_MOUNT_PATH = Path("/artifacts")
+LOCAL_PROJECT_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = Path("/root/project")
+
+app = modal.App(APP_NAME)
 
 
 def build_image() -> modal.Image:
     """
-    Base image with Stockfish and project requirements pre-installed.
+    Base image with Stockfish, project code, and requirements pre-installed.
     """
-
     return (
         modal.Image.debian_slim(python_version="3.11")
         .apt_install("stockfish")
-        .pip_install_from_requirements("requirements.txt")
+        # requirements from the local project dir
+        .pip_install_from_requirements(str(LOCAL_PROJECT_ROOT / "requirements.txt"))
+        # forward your whole project so `train.py` is visible at /root/project
+        .add_local_dir(
+            str(LOCAL_PROJECT_ROOT),
+            remote_path=str(PROJECT_ROOT),
+        )
     )
 
 
-app = modal.App(APP_NAME)
 image = build_image()
+
 artifacts = modal.Volume.from_name(
     ARTIFACT_VOLUME_NAME, create_if_missing=True
 )
@@ -36,7 +44,7 @@ artifacts = modal.Volume.from_name(
 
 @app.function(
     image=image,
-    gpu=modal.gpu.A10G(),
+    gpu="A10G",                # or modal.gpu.A10G() if you prefer the typed API
     timeout=60 * 60 * 12,
     volumes={str(ARTIFACT_MOUNT_PATH): artifacts},
 )
@@ -59,13 +67,18 @@ def train_remote(
     """
     Launch the PPO training loop on Modal.
 
-    Use `modal run modal_train.py::train_remote --total-steps 200000 ...`
-    to customize hyperparameters.
+    Use:
+      modal run modal_train.py::train_remote --total-steps 200000 ...
     """
     import os
+    import sys
 
+    # Make sure Python can import from PROJECT_ROOT
     os.chdir(PROJECT_ROOT)
-    from train import PPOConfig, run_training  # pylint: disable=import-error
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+
+    from train import PPOConfig, run_training  # type: ignore[import]
 
     artifact_root = ARTIFACT_MOUNT_PATH
     checkpoint_dir = artifact_root / checkpoint_subdir
@@ -94,4 +107,3 @@ def train_remote(
         cfg.hf_token = os.environ.get(hf_token_env_var) or cfg.hf_token
 
     run_training(cfg)
-
