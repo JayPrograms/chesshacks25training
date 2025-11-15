@@ -65,30 +65,58 @@ During training:
 
 ## 6. Publishing Checkpoints to Hugging Face
 
-1. Install the extra dependency (already listed in `requirements.txt`): `pip install huggingface-hub`.
-2. Authenticate once:
-   ```bash
-   huggingface-cli login
-   ```
-3. Create a model repo on the Hugging Face website (e.g., `your-username/chessbot-ppo`).
-4. After training, upload checkpoints and metadata (replace repo/name as needed):
-   ```python
-   from pathlib import Path
-   from huggingface_hub import HfApi
-   from rl_chess.models import PolicyValueNet
+`PolicyValueNet` mixes in Hugging Face’s `PyTorchModelHubMixin`, so you can call the standard `save_pretrained` / `push_to_hub` helpers exactly like the Transformers examples. Make sure you have `huggingface-hub` installed (`pip install huggingface-hub`) and authenticate once via `hf auth login` (stores a token that both `train.py` and `hg.py` can reuse).
 
-   repo_id = "your-username/chessbot-ppo"
-   checkpoint = Path("checkpoints/policy_step_100000.pt")
+### Option A – Export directly from `train.py`
 
-   api = HfApi()
-   api.create_repo(repo_id, repo_type="model", exist_ok=True)
-   api.upload_file(
-       path_or_fileobj=checkpoint,
-       path_in_repo=checkpoint.name,
-       repo_id=repo_id,
-   )
-   # (Optional) Upload an inference script or config JSON the same way.
-   ```
-5. Document the training config (total steps, reward shaping, opponent policy) in the Hugging Face model card so others can reproduce results.
+Run training with the new flags to produce a Hub-ready artifact automatically and (optionally) push it after the final checkpoint:
 
-Tip: export a lightweight `inference.py` that loads `PolicyValueNet`, wraps it in `ChessEnv`, and exposes a `predict` function—upload it alongside the weights for easy downstream use.
+```bash
+python train.py \
+  --total-steps 100000 \
+  --hf-save-dir artifacts/chessbot \
+  --hf-repo-id your-username/chessbot-ppo \
+  --hf-push-to-hub \
+  --hf-commit-message "Upload step {step} weights"
+```
+
+Flags overview:
+
+- `--hf-save-dir`: calls `policy.save_pretrained` so the repo contains `pytorch_model.bin` + `config.json`.
+- `--hf-repo-id`: target Hub repo (`username/model-name`).
+- `--hf-push-to-hub`: push right after training finishes (token picked up from `HF_TOKEN`, `HUGGINGFACEHUB_API_TOKEN`, or `huggingface-cli login`).
+- `--hf-private`, `--hf-token`, `--hf-commit-message`: match the `hg.py` helper semantics.
+
+### Option B – Use the standalone helper
+
+If you prefer a manual step, the helper script still works:
+
+```bash
+python hg.py \
+  --repo-id your-username/chessbot-ppo \
+  --checkpoint checkpoints/policy_step_100000.pt
+```
+
+The script verifies the checkpoint, ensures the repo exists, and then calls `push_to_hub` under the hood. Use `--private` or `--commit-message` to customize the upload.
+
+### Using the model in your competition bot
+
+In any downstream app (e.g., your ACC chess bot), install this repo or copy `rl_chess` into your project, then load the uploaded weights:
+
+```python
+from rl_chess.models import PolicyValueNet
+
+MODEL_ID = "your-username/chessbot-ppo"
+
+policy = PolicyValueNet.from_pretrained(
+    MODEL_ID,
+    cache_dir="./.model_cache",
+)
+policy.eval()
+
+def get_move(board_tensor, legal_mask):
+    action, _, _ = policy.act(board_tensor, legal_mask, deterministic=True)
+    return action.item()
+```
+
+The Hub cache means your bot always grabs the latest published weights without bloating the contest repository. Document the training config (steps, reward shaping, opponent policy) in the Hugging Face model card so others can reproduce results.

@@ -8,6 +8,7 @@ from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
+from huggingface_hub import PyTorchModelHubMixin
 
 from rl_chess.move_encoding import MAX_MOVES
 
@@ -22,7 +23,7 @@ def _masked_logits(
     return logits + illegal
 
 
-class PolicyValueNet(nn.Module):
+class PolicyValueNet(nn.Module, PyTorchModelHubMixin):
     def __init__(
         self,
         board_channels: int = 12,

@@ -8,7 +8,7 @@ import argparse
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -34,6 +34,12 @@ class PPOConfig:
     max_grad_norm: float = 1.0
     checkpoint_dir: Path = Path("checkpoints")
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    hf_save_dir: Optional[Path] = None
+    hf_repo_id: Optional[str] = None
+    hf_push_to_hub: bool = False
+    hf_private: bool = False
+    hf_commit_message: str = "Add chess policy checkpoint"
+    hf_token: Optional[str] = None
 
 
 class RolloutBuffer:
@@ -144,6 +150,33 @@ def save_checkpoint(policy: PolicyValueNet, step: int, cfg: PPOConfig):
     print(f"[checkpoint] saved {ckpt_path}")
 
 
+def maybe_export_to_hub(
+    policy: PolicyValueNet,
+    cfg: PPOConfig,
+    step_label: str,
+):
+    if cfg.hf_save_dir is not None:
+        export_dir = cfg.hf_save_dir.expanduser()
+        export_dir.mkdir(parents=True, exist_ok=True)
+        policy.save_pretrained(export_dir)
+        print(f"[hf] saved pretrained bundle to {export_dir}")
+    if cfg.hf_push_to_hub:
+        if not cfg.hf_repo_id:
+            raise ValueError("--hf-repo-id must be set when --hf-push-to-hub is used.")
+        push_kwargs = {
+            "commit_message": cfg.hf_commit_message.format(step=step_label),
+            "private": cfg.hf_private,
+        }
+        if cfg.hf_token:
+            push_kwargs["token"] = cfg.hf_token
+        print(
+            f"[hf] pushing weights to {cfg.hf_repo_id} "
+            f"(private={cfg.hf_private})..."
+        )
+        policy.push_to_hub(cfg.hf_repo_id, **push_kwargs)
+        print("[hf] push complete.")
+
+
 def parse_args() -> PPOConfig:
     parser = argparse.ArgumentParser(description="Train a chessbot with PPO.")
     parser.add_argument("--total-steps", type=int, default=25_000)
@@ -153,6 +186,40 @@ def parse_args() -> PPOConfig:
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--checkpoint-dir", type=str, default="checkpoints")
+    parser.add_argument(
+        "--hf-save-dir",
+        type=str,
+        default=None,
+        help="Optional directory to store a Hugging Face save_pretrained bundle.",
+    )
+    parser.add_argument(
+        "--hf-repo-id",
+        type=str,
+        default=None,
+        help="Hugging Face repo id (e.g. username/chessbot-ppo).",
+    )
+    parser.add_argument(
+        "--hf-push-to-hub",
+        action="store_true",
+        help="Push the final trained weights to the Hugging Face Hub.",
+    )
+    parser.add_argument(
+        "--hf-private",
+        action="store_true",
+        help="Mark the Hugging Face repo as private when pushing.",
+    )
+    parser.add_argument(
+        "--hf-commit-message",
+        type=str,
+        default="Add chess policy checkpoint",
+        help="Commit message to use when pushing to the Hub.",
+    )
+    parser.add_argument(
+        "--hf-token",
+        type=str,
+        default=None,
+        help="Optional Hugging Face token to use for push_to_hub.",
+    )
     args = parser.parse_args()
 
     cfg = PPOConfig(
@@ -163,6 +230,14 @@ def parse_args() -> PPOConfig:
         learning_rate=args.lr,
         device=args.device or ("cuda" if torch.cuda.is_available() else "cpu"),
         checkpoint_dir=Path(args.checkpoint_dir),
+        hf_save_dir=Path(args.hf_save_dir).expanduser()
+        if args.hf_save_dir
+        else None,
+        hf_repo_id=args.hf_repo_id,
+        hf_push_to_hub=args.hf_push_to_hub,
+        hf_private=args.hf_private,
+        hf_commit_message=args.hf_commit_message,
+        hf_token=args.hf_token,
     )
     return cfg
 
@@ -189,6 +264,8 @@ def main():
             print(f"[info] steps={total_steps} elapsed={elapsed:.1f}s")
 
     save_checkpoint(policy, total_steps, cfg)
+    if cfg.hf_save_dir or cfg.hf_push_to_hub:
+        maybe_export_to_hub(policy, cfg, step_label=f"step-{total_steps}")
     print("Training complete.")
 
 

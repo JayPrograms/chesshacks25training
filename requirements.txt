@@ -3,5 +3,6 @@ python-chess==1.999
 torch==2.9.0
 numpy>=1.24
 huggingface-hub>=0.24
+safetensors>=0.4.1
 requests>=2.31
 
